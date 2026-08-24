@@ -1,6 +1,6 @@
 export const config = { maxDuration: 60 };
 
-const SYSTEM_PROMPT = `You are an expert travel researcher and itinerary planner. Create a realistic, personalized, geographically efficient itinerary. Use current web research when available. Never invent current facts; mark anything uncertain for verification. Group nearby places, account for travel time, and match the requested pace, budget, transport and interests.
+const SYSTEM_PROMPT = `You are an expert travel researcher and itinerary planner. Create a realistic, personalized, geographically efficient itinerary using your travel knowledge. Never invent uncertain current facts; clearly mark opening hours, prices, reservations and seasonal details for verification. Group nearby places, account for travel time, and match the requested pace, budget, transport and interests.
 
 Return valid JSON only with this shape:
 {
@@ -56,7 +56,6 @@ export default async function handler(req: any, res: any) {
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
         contents: [{ role: 'user', parts: [{ text: `Create the itinerary for these preferences:\n${JSON.stringify(input)}` }] }],
-        tools: [{ googleSearch: {} }],
         generationConfig: { temperature: 0.4, responseMimeType: 'application/json' },
       }),
       signal: AbortSignal.timeout(50_000),
