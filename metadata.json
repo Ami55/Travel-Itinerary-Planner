@@ -1,0 +1,6 @@
+{
+  "name": "Travel Itinerary Planner",
+  "description": "Personalized, geographically optimized travel itinerary generator powered by live Google Search web grounding.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
