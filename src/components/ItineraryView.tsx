@@ -76,8 +76,14 @@ export const ItineraryView: React.FC<ItineraryViewProps> = ({
   };
 
   const collapseAll = () => {
-    setExpandedDays({});
-  };
+  const allCollapsed: Record<number, boolean> = {};
+
+  days.forEach((day) => {
+    allCollapsed[day.day] = false;
+  });
+
+  setExpandedDays(allCollapsed);
+};
 
   const handlePrint = () => {
     window.print();
