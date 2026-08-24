@@ -1,75 +1,103 @@
-import type { IncomingMessage, ServerResponse } from 'http';
-import { processItineraryGeneration } from '../server/itineraryService';
+export const config = { maxDuration: 60 };
 
-// Extend Vercel Serverless Function execution timeout to 60s for AI web search
-export const config = {
-  maxDuration: 60,
-};
+const SYSTEM_PROMPT = `You are an expert travel researcher and itinerary planner. Create a realistic, personalized, geographically efficient itinerary. Use current web research when available. Never invent current facts; mark anything uncertain for verification. Group nearby places, account for travel time, and match the requested pace, budget, transport and interests.
 
-async function parseBody(req: any): Promise<any> {
-  if (req.body) {
-    if (typeof req.body === 'string') {
-      try {
-        return JSON.parse(req.body);
-      } catch {
-        return req.body;
-      }
-    }
-    return req.body;
-  }
+Return valid JSON only with this shape:
+{
+  "trip": { "destination": "string", "country": "string", "startDate": "YYYY-MM-DD", "endDate": "YYYY-MM-DD", "numberOfDays": 1, "travellers": 1, "pace": "string", "budget": "string", "transportation": "string", "interests": ["string"], "summary": "string", "seasonalNote": "string" },
+  "importantBeforeYouGo": [{ "title": "string", "details": "string" }],
+  "days": [{
+    "day": 1, "date": "YYYY-MM-DD", "title": "string", "neighbourhoods": ["string"], "overview": "string", "estimatedWalking": "string",
+    "activities": [{ "startTime": "09:00", "endTime": "10:30", "name": "string", "category": "Attraction | Food | Transit | Break | Experience", "location": "string", "description": "string", "travelFromPrevious": "string", "estimatedCost": "string", "reservation": "Not needed | Recommended | Required | Verify", "indoorOutdoor": "Indoor | Outdoor | Both", "verificationNote": null, "sourceIds": ["source-1"] }],
+    "mealSuggestions": [{ "meal": "Lunch", "name": "string", "area": "string", "priceLevel": "$ | $$ | $$$", "whyRecommended": "string", "sourceIds": ["source-1"] }],
+    "rainAlternative": { "name": "string", "details": "string", "sourceIds": ["source-1"] }, "localTip": "string"
+  }],
+  "sources": [{ "id": "source-1", "title": "string", "url": "https://example.com", "publisher": "string", "accessedFor": "string" }],
+  "disclaimer": "Opening hours, prices, availability and local conditions can change. Confirm important details before visiting."
+}`;
 
-  return new Promise((resolve) => {
-    let raw = '';
-    req.on('data', (chunk: any) => {
-      raw += chunk;
-    });
-    req.on('end', () => {
-      try {
-        resolve(raw ? JSON.parse(raw) : {});
-      } catch {
-        resolve({});
-      }
-    });
-    req.on('error', () => {
-      resolve({});
-    });
-  });
+function send(res: any, status: number, body: any) {
+  res.status(status).json(body);
 }
 
-// Vercel Serverless Function Handler
 export default async function handler(req: any, res: any) {
-  // Handle CORS / preflight
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
-  );
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'POST') {
+    return send(res, 405, { success: false, error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
   }
 
-  if (req.method !== 'POST') {
-    res.status(405).json({
+  const apiKey = process.env.GEMINI_API_KEY || '';
+  if (!apiKey.trim()) {
+    return send(res, 500, {
       success: false,
-      error: 'Method not allowed. Only POST is supported.',
+      error: 'GEMINI_API_KEY is missing in Vercel.',
+      code: 'MISSING_API_KEY',
     });
-    return;
+  }
+
+  const input = typeof req.body === 'string' ? JSON.parse(req.body) : req.body || {};
+  if (!input.destination || !input.startDate || !input.numberOfDays || !input.travellers) {
+    return send(res, 400, {
+      success: false,
+      error: 'Destination, start date, number of days and travellers are required.',
+      code: 'INVALID_INPUT',
+    });
   }
 
   try {
-    const body = await parseBody(req);
-    const result = await processItineraryGeneration(body || {});
-    res.status(result.status).json(result.data);
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey.trim())}`;
+    const geminiResponse = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+        contents: [{ role: 'user', parts: [{ text: `Create the itinerary for these preferences:\n${JSON.stringify(input)}` }] }],
+        tools: [{ googleSearch: {} }],
+        generationConfig: { temperature: 0.4, responseMimeType: 'application/json' },
+      }),
+      signal: AbortSignal.timeout(50_000),
+    });
+
+    const raw = await geminiResponse.text();
+    let geminiData: any = {};
+    try { geminiData = raw ? JSON.parse(raw) : {}; } catch { /* handled below */ }
+
+    if (!geminiResponse.ok) {
+      const message = geminiData?.error?.message || `Gemini returned HTTP ${geminiResponse.status}`;
+      const lower = message.toLowerCase();
+      const code = geminiResponse.status === 429 ? 'QUOTA_EXCEEDED'
+        : geminiResponse.status === 400 && lower.includes('api key') ? 'INVALID_API_KEY'
+        : 'GEMINI_API_ERROR';
+      console.error('Gemini API error:', geminiResponse.status, message);
+      return send(res, geminiResponse.status === 429 ? 429 : 502, { success: false, error: message, code });
+    }
+
+    const modelText = (geminiData?.candidates?.[0]?.content?.parts || [])
+      .map((part: any) => typeof part?.text === 'string' ? part.text : '')
+      .join('')
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/, '')
+      .trim();
+
+    let itinerary: any;
+    try { itinerary = JSON.parse(modelText); }
+    catch {
+      console.error('Gemini returned invalid JSON:', modelText.slice(0, 500));
+      return send(res, 502, { success: false, error: 'Gemini returned an invalid itinerary response.', code: 'INVALID_AI_RESPONSE' });
+    }
+
+    return send(res, 200, { success: true, itinerary });
   } catch (error: any) {
-    console.error('Vercel serverless function error in /api/generate-itinerary:', error);
-    res.status(500).json({
+    console.error('Itinerary function error:', error);
+    const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError';
+    return send(res, timedOut ? 504 : 500, {
       success: false,
-      error: 'An unexpected error occurred while generating your itinerary. You can also generate in Curated Mode.',
-      code: 'SERVERLESS_ERROR',
+      error: timedOut ? 'Gemini request timed out.' : (error?.message || 'Unexpected server error.'),
+      code: timedOut ? 'REQUEST_TIMEOUT' : 'SERVER_ERROR',
     });
   }
 }
