@@ -1,5 +1,68 @@
-import { GoogleGenAI } from '@google/genai';
 import { generateCuratedItinerary, TripPreferencesInput } from './curatedItinerary';
+
+async function generateWithGeminiRest(
+  apiKey: string,
+  model: string,
+  prompt: string,
+  withSearch: boolean
+): Promise<any> {
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+    model
+  )}:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+  const generationConfig: Record<string, unknown> = {
+    temperature: 0.4,
+    responseMimeType: 'application/json',
+  };
+
+  const requestBody: any = {
+    systemInstruction: {
+      parts: [{ text: ITINERARY_SYSTEM_PROMPT }],
+    },
+    contents: [
+      {
+        role: 'user',
+        parts: [{ text: prompt }],
+      },
+    ],
+    generationConfig,
+  };
+
+  if (withSearch) {
+    requestBody.tools = [{ googleSearch: {} }];
+  }
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestBody),
+    signal: AbortSignal.timeout(50_000),
+  });
+
+  const responseBody = await response.text();
+  let data: any = {};
+  try {
+    data = responseBody ? JSON.parse(responseBody) : {};
+  } catch {
+    data = {};
+  }
+
+  if (!response.ok) {
+    const error: any = new Error(
+      data?.error?.message || `Gemini API returned HTTP ${response.status}`
+    );
+    error.status = response.status;
+    error.statusCode = response.status;
+    throw error;
+  }
+
+  const text = (data?.candidates?.[0]?.content?.parts || [])
+    .map((part: any) => (typeof part?.text === 'string' ? part.text : ''))
+    .join('')
+    .trim();
+
+  return { ...data, text };
+}
 
 export const ITINERARY_SYSTEM_PROMPT = `You are an expert travel researcher and itinerary planner. Create a realistic, personalized and geographically efficient itinerary from the supplied trip preferences.
 
@@ -258,7 +321,6 @@ export async function processItineraryGeneration(
 
   const modelsToTry = [
     { name: 'gemini-2.5-flash', withSearch: true },
-    { name: 'gemini-3.7-flash', withSearch: true },
     { name: 'gemini-2.5-flash', withSearch: false },
     { name: 'gemini-2.5-flash-lite', withSearch: false },
   ];
@@ -267,29 +329,18 @@ export async function processItineraryGeneration(
   let parsedItinerary: any = null;
   let lastResponse: any = null;
 
-  const ai = new GoogleGenAI({
-    apiKey: apiKey.trim(),
-  });
-
   for (const modelConfig of modelsToTry) {
     try {
-      const configObj: any = {
-        systemInstruction: ITINERARY_SYSTEM_PROMPT,
-      };
-
-      if (modelConfig.withSearch) {
-        configObj.tools = [{ googleSearch: {} }];
-      }
-
-      const response = await ai.models.generateContent({
-        model: modelConfig.name,
-        contents: `Create a realistic, personalized, and geographically sensible day-by-day travel itinerary with live web research for these trip preferences:\n${JSON.stringify(
+      const response = await generateWithGeminiRest(
+        apiKey.trim(),
+        modelConfig.name,
+        `Create a realistic, personalized, and geographically sensible day-by-day travel itinerary with live web research for these trip preferences:\n${JSON.stringify(
           tripPreferences,
           null,
           2
         )}`,
-        config: configObj,
-      });
+        modelConfig.withSearch
+      );
 
       const outputText = response.text;
       if (outputText && typeof outputText === 'string' && outputText.trim() !== '') {
