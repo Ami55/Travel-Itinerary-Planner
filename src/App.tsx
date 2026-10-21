@@ -185,7 +185,7 @@ export default function App() {
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left">
           <div className="flex flex-col sm:flex-row items-center gap-1.5 sm:gap-3">
             <span className="font-medium text-slate-700">
-              &copy; 2026 Travel Planner Inc. Developed by Ami - SEO Girl. All rights reserved.
+              &copy; 2026 Travel Itinerary Planner. Developed by <strong>SEO Girl - Ami</strong>. All rights reserved.
             </span>
           </div>
 
